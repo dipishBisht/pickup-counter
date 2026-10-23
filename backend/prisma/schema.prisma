@@ -1,0 +1,65 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum OrderStatus {
+  PENDING
+  PAID
+  EXPIRED
+  NEEDS_REVIEW
+  PICKED_UP
+}
+
+model Product {
+  id        String      @id @default(uuid()) @db.Uuid
+  name      String      @unique
+  price     Int
+  stock     Int
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+  items     OrderItem[]
+}
+
+model Order {
+  id             String      @id @default(uuid()) @db.Uuid
+  status         OrderStatus @default(PENDING)
+  total          Int
+  expiresAt      DateTime
+  claimedAt      DateTime?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+  items          OrderItem[]
+  idempotencyKey String?     @unique
+}
+
+model OrderItem {
+  id        String @id @default(uuid()) @db.Uuid
+  orderId   String @db.Uuid
+  productId String @db.Uuid
+  quantity  Int
+  price     Int
+
+  order   Order   @relation(fields: [orderId], references: [id])
+  product Product @relation(fields: [productId], references: [id])
+
+  @@unique([orderId, productId])
+}
+
+model WebhookEvent {
+  id        String   @id @default(uuid()) @db.Uuid
+  eventId   String   @unique
+  orderId   String   @db.Uuid
+  amount    Int
+  status    String
+  createdAt DateTime @default(now())
+}
