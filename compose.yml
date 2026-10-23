@@ -17,5 +17,30 @@ services:
       timeout: 5s
       retries: 10
 
+  backend:
+    build: ./backend
+    container_name: pickup-counter-backend
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - ./backend/.env
+    environment:
+      DATABASE_URL: postgresql://pickup_user:local_dev_password@db:5432/pickup_counter
+      PORT: 8080
+    ports:
+      - "8080:8080"
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:8080
+    container_name: pickup-counter-frontend
+    depends_on:
+      - backend
+    ports:
+      - "3000:3000"
+
 volumes:
   postgres_data:

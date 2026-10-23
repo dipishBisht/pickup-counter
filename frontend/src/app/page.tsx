@@ -28,6 +28,22 @@ type Order = {
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
 
+const productArt = [
+  { background: "bg-[#e8efe7]", foreground: "text-[#315d46]", symbol: "◉" },
+  { background: "bg-[#f4e8da]", foreground: "text-[#8d542f]", symbol: "▰" },
+  { background: "bg-[#eee8f4]", foreground: "text-[#76528c]", symbol: "▤" },
+  { background: "bg-[#f4e6e4]", foreground: "text-[#a34d43]", symbol: "◈" },
+  { background: "bg-[#e2ecef]", foreground: "text-[#3e6c7c]", symbol: "◒" },
+];
+
+const statusStyles: Record<string, string> = {
+  paid: "bg-green-100 text-green-800",
+  picked_up: "bg-green-100 text-green-800",
+  expired: "bg-orange-100 text-orange-800",
+  needs_review: "bg-orange-100 text-orange-800",
+  pending: "bg-amber-100 text-amber-800",
+};
+
 function formatPrice(paise: number) {
   return new Intl.NumberFormat("en-IN", {
     style: "currency",
@@ -52,14 +68,13 @@ export default function Home() {
   const [products, setProducts] = useState<Product[]>([]);
   const [cart, setCart] = useState<Record<string, number>>({});
   const [order, setOrder] = useState<Order | null>(null);
-  const [currentTime, setCurrentTime] = useState<number | null>(null);
+  const [currentTime, setCurrentTime] = useState<number>(0);
   const [clockTick, setClockTick] = useState(0);
   const [loading, setLoading] = useState(true);
   const [placingOrder, setPlacingOrder] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
-  // Load products initially and whenever an order action requires a refresh.
   const loadProducts = useCallback(async (signal?: AbortSignal) => {
     try {
       const data = await fetchProducts(signal);
@@ -81,63 +96,34 @@ export default function Home() {
     }
   }, []);
 
-  // Initial product loading.
+  // Load products when the page mounts.
   useEffect(() => {
     const controller = new AbortController();
 
-    async function initializeStore() {
-      try {
-        const data = await fetchProducts(controller.signal);
-
-        if (controller.signal.aborted) return;
-
-        setProducts(data);
-        setError("");
-      } catch {
-        if (controller.signal.aborted) return;
-
-        setError(
-          "Unable to connect to the store. Check that the backend is running.",
-        );
-      } finally {
-        if (!controller.signal.aborted) {
-          setLoading(false);
-        }
-      }
+    async function initializeProducts() {
+      await loadProducts(controller.signal);
     }
 
-    void initializeStore();
+    void initializeProducts();
 
-    return () => {
-      controller.abort();
-    };
-  }, []);
+    return () => controller.abort();
+  }, [loadProducts]);
 
-  // Update the clock through a timer while an order is pending.
+  // Update the countdown while an order is pending.
   useEffect(() => {
-    if (!order || order.status !== "PENDING") {
-      return;
-    }
+    if (!order || order.status !== "PENDING") return;
 
-    const updateClock = () => {
+    const timer = window.setInterval(() => {
       setCurrentTime(Date.now());
       setClockTick((tick) => tick + 1);
-    };
+    }, 1000);
 
-    const timer = window.setInterval(updateClock, 1000);
-
-    // Wait for the timer callback to update the clock.
-    // This avoids synchronously setting state inside the effect.
-    return () => {
-      window.clearInterval(timer);
-    };
+    return () => window.clearInterval(timer);
   }, [order?.id, order?.status]);
 
-  // Poll the backend for payment/status updates.
+  // Poll the backend for payment and order status updates.
   useEffect(() => {
-    if (!order || order.status !== "PENDING") {
-      return;
-    }
+    if (!order || order.status !== "PENDING") return;
 
     const controller = new AbortController();
     let cancelled = false;
@@ -195,28 +181,21 @@ export default function Home() {
       quantity: cart[product.id],
     }));
 
+  const cartCount = cartItems.reduce((sum, item) => sum + item.quantity, 0);
+
   const total = cartItems.reduce(
     (sum, item) => sum + item.price * item.quantity,
     0,
   );
 
-  // Derive the countdown without maintaining a separate secondsLeft state.
+  // Calculate the remaining reservation time.
   const secondsLeft =
-    order?.status === "PENDING" && currentTime !== null
+    order?.status === "PENDING" && currentTime > 0
       ? Math.max(
           0,
           Math.ceil((new Date(order.expiresAt).getTime() - currentTime) / 1000),
         )
-      : order?.status === "PENDING"
-        ? Math.max(
-            0,
-            Math.ceil(
-              (new Date(order.expiresAt).getTime() -
-                new Date(order.expiresAt).getTime()) /
-                1000,
-            ),
-          )
-        : 0;
+      : 0;
 
   function changeQuantity(product: Product, delta: number) {
     setError("");
@@ -275,9 +254,8 @@ export default function Home() {
       const createdOrder = data as Order;
 
       setOrder(createdOrder);
-      setCurrentTime(null);
+      setCurrentTime(0);
       setCart({});
-
       setNotice("Order created. Complete payment before the hold expires.");
 
       await loadProducts();
@@ -290,111 +268,142 @@ export default function Home() {
 
   async function startNewOrder() {
     setOrder(null);
-    setCurrentTime(null);
+    setCurrentTime(0);
     setNotice("");
     setError("");
+    setCart({});
 
     await loadProducts();
   }
 
   return (
-    <main className="store-shell">
-      <header className="topbar">
-        <a className="brand" href="#">
-          <span className="brand-mark">P</span>
+    <main className="mx-auto min-h-screen max-w-[1440px] px-5 text-[#202b26] sm:px-8 lg:px-[6%]">
+      {/* Header */}
+      <header className="flex min-h-[68px] items-center justify-between border-b border-[#e6e8df] sm:min-h-[82px]">
+        <a
+          href="#"
+          className="inline-flex items-center gap-3 text-lg font-extrabold tracking-tight"
+        >
+          <span className="grid size-[34px] place-items-center rounded-[11px] bg-[#235b43] text-xl text-white">
+            P
+          </span>
           <span>Pickup Counter</span>
         </a>
 
-        <span className="topbar-label">QUICK PICKUP STORE</span>
+        <span className="text-right text-[9px] font-bold tracking-[1px] text-[#737b74] sm:text-[10px] sm:tracking-[1.8px]">
+          QUICK PICKUP STORE
+        </span>
       </header>
 
-      <section className="hero">
+      {/* Hero */}
+      <section className="flex min-h-[280px] items-center justify-between gap-5 border-b border-[#e6e8df] py-10 sm:min-h-[310px] sm:gap-8 sm:py-[52px]">
         <div>
-          <p className="eyebrow">ORDER ONLINE · PICK UP IN STORE</p>
+          <p className="text-[10px] font-extrabold tracking-[1.8px] text-[#235b43]">
+            ORDER ONLINE · PICK UP IN STORE
+          </p>
 
-          <h1>
+          <h1 className="my-4 text-[40px] leading-[1.04] font-extrabold tracking-[-2px] sm:my-[17px] sm:text-6xl lg:text-[68px] lg:tracking-[-3.4px]">
             Good things.
             <br />
             Ready when you are.
           </h1>
 
-          <p className="hero-copy">
+          <p className="max-w-[470px] text-sm leading-7 text-[#737b74] sm:text-[15px] sm:leading-8">
             Choose your favourites, reserve your items, and collect them when
             your payment is confirmed.
           </p>
         </div>
 
-        <div className="hero-stamp">
-          <span className="stamp-icon">✳</span>
+        <div className="hidden size-[154px] shrink-0 rotate-[5deg] flex-col items-center justify-center gap-2 rounded-full border border-[#c8d8cb] text-xs font-semibold text-[#235b43] sm:flex">
+          <span className="text-4xl">✳</span>
           <span>Quick order</span>
           <span>Easy pickup</span>
         </div>
       </section>
 
+      {/* Alerts */}
       {error && (
-        <div className="alert alert-error" role="alert">
+        <div
+          role="alert"
+          className="mt-5 rounded-xl border border-[#edc6c0] bg-[#fff0ed] px-4 py-3 text-sm leading-6 text-[#922f24]"
+        >
           {error}
         </div>
       )}
 
       {notice && (
-        <div className="alert alert-info" role="status">
+        <div
+          role="status"
+          className="mt-5 rounded-xl border border-[#cddfce] bg-[#edf6ed] px-4 py-3 text-sm leading-6 text-[#28573a]"
+        >
           {notice}
         </div>
       )}
 
       {order ? (
-        <section className="order-panel">
-          <div className="section-heading">
+        /* Order summary */
+        <section className="mx-auto my-8 max-w-[660px] rounded-[17px] border border-[#e6e8df] bg-white p-5 sm:my-12 sm:p-[30px]">
+          <div className="flex items-center justify-between gap-4">
             <div>
-              <p className="eyebrow">YOUR ORDER</p>
-              <h2>Order summary</h2>
+              <p className="mb-2 text-[10px] font-extrabold tracking-[1.8px] text-[#235b43]">
+                YOUR ORDER
+              </p>
+              <h2 className="text-2xl font-bold tracking-tight sm:text-[27px]">
+                Order summary
+              </h2>
             </div>
 
             <span
-              className={`status-pill status-${order.status.toLowerCase()}`}
+              className={`shrink-0 rounded-full px-3 py-2 text-[10px] font-extrabold ${statusStyles[order.status.toLowerCase()] ?? "bg-stone-100 text-stone-700"}`}
             >
               {order.status.replaceAll("_", " ")}
             </span>
           </div>
 
-          <p className="order-id">
-            Reference: <strong>{order.id}</strong>
+          <p className="my-5 break-words text-xs text-[#737b74]">
+            Reference: <strong className="text-[#202b26]">{order.id}</strong>
           </p>
 
-          <div className="order-items">
+          <div className="divide-y divide-[#e6e8df]">
             {order.items.map((item) => {
               const product = products.find((p) => p.id === item.productId);
 
               return (
-                <div className="order-line" key={item.id}>
+                <div
+                  key={item.id}
+                  className="flex items-start justify-between gap-4 py-4 text-xs"
+                >
                   <span>
                     {product?.name ?? "Store item"} × {item.quantity}
                   </span>
-
-                  <strong>{formatPrice(item.price * item.quantity)}</strong>
+                  <strong className="shrink-0">
+                    {formatPrice(item.price * item.quantity)}
+                  </strong>
                 </div>
               );
             })}
           </div>
 
-          <div className="order-total">
+          <div className="flex items-center justify-between border-t border-[#e6e8df] py-4 text-sm">
             <span>Total</span>
-            <strong>{formatPrice(order.total)}</strong>
+            <strong className="text-xl tracking-tight">
+              {formatPrice(order.total)}
+            </strong>
           </div>
 
           {order.status === "PENDING" && (
-            <div className="countdown-card">
-              <div>
-                <span className="countdown-label">RESERVATION TIME LEFT</span>
-
-                <strong className="countdown">
+            <div className="my-5 flex flex-col gap-3 rounded-xl bg-[#f1f5ed] p-4 sm:flex-row sm:items-center sm:justify-between sm:gap-5">
+              <div className="grid gap-1.5">
+                <span className="text-[9px] font-extrabold tracking-[1px] text-[#737b74]">
+                  RESERVATION TIME LEFT
+                </span>
+                <strong className="text-[32px] leading-tight font-bold tabular-nums text-[#235b43]">
                   {String(Math.floor(secondsLeft / 60)).padStart(2, "0")}:
                   {String(secondsLeft % 60).padStart(2, "0")}
                 </strong>
               </div>
 
-              <p>
+              <p className="max-w-[220px] text-[11px] leading-5 text-[#737b74]">
                 Your items are temporarily reserved. This page checks payment
                 status automatically.
               </p>
@@ -402,105 +411,130 @@ export default function Home() {
           )}
 
           {order.status === "PAID" && (
-            <p className="success-message">
+            <p className="rounded-xl bg-[#eaf5e9] p-4 text-sm leading-6 text-[#245c37]">
               ✓ Payment confirmed. Show your order reference when collecting.
             </p>
           )}
 
           {order.status === "NEEDS_REVIEW" && (
-            <p className="review-message">
+            <p className="rounded-xl bg-[#fff2e5] p-4 text-sm leading-6 text-[#8a4d18]">
               Payment requires manual review. Please contact the store with your
               order reference.
             </p>
           )}
 
           {order.status === "EXPIRED" && (
-            <p className="review-message">
+            <p className="rounded-xl bg-[#fff2e5] p-4 text-sm leading-6 text-[#8a4d18]">
               Your reservation has expired and the held stock has been released.
             </p>
           )}
 
           {order.status === "PICKED_UP" && (
-            <p className="success-message">✓ This order has been picked up.</p>
+            <p className="rounded-xl bg-[#eaf5e9] p-4 text-sm leading-6 text-[#245c37]">
+              ✓ This order has been picked up.
+            </p>
           )}
 
           <button
-            className="primary-button full-button"
+            className="mt-4 min-h-[47px] w-full rounded-[10px] bg-[#235b43] px-4 py-3 text-[13px] font-bold text-white transition-colors hover:bg-[#194631] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#235b43] disabled:cursor-not-allowed disabled:opacity-45"
             onClick={startNewOrder}
           >
             Back to store
           </button>
         </section>
       ) : (
-        <div className="shop-layout">
-          <section className="catalog">
-            <div className="section-heading">
+        /* Store and basket */
+        <div className="grid grid-cols-1 items-start gap-8 py-8 sm:py-[42px] lg:grid-cols-[minmax(0,1fr)_320px] lg:gap-10">
+          <section>
+            <div className="mb-6 flex items-center justify-between gap-4">
               <div>
-                <p className="eyebrow">THE EVERYDAY ESSENTIALS</p>
-                <h2>Shop the counter</h2>
+                <p className="mb-2 text-[10px] font-extrabold tracking-[1.8px] text-[#235b43]">
+                  THE EVERYDAY ESSENTIALS
+                </p>
+                <h2 className="text-2xl font-bold tracking-tight sm:text-[27px]">
+                  Shop the counter
+                </h2>
               </div>
 
-              <span className="item-count">{products.length} products</span>
+              <span className="shrink-0 text-xs text-[#737b74]">
+                {products.length} products
+              </span>
             </div>
 
             {loading ? (
-              <p className="empty-state">Loading the store…</p>
+              <p className="py-10 text-center text-sm text-[#737b74]">
+                Loading the store…
+              </p>
             ) : products.length === 0 ? (
-              <p className="empty-state">No products available right now.</p>
+              <p className="py-10 text-center text-sm text-[#737b74]">
+                No products available right now.
+              </p>
             ) : (
-              <div className="product-grid">
+              <div className="grid grid-cols-2 gap-3 sm:gap-[18px]">
                 {products.map((product, index) => {
                   const quantity = cart[product.id] ?? 0;
+                  const art = productArt[index % productArt.length];
 
                   return (
-                    <article className="product-card" key={product.id}>
-                      <div className={`product-art art-${index % 5}`}>
-                        <span className="product-art-symbol">
-                          {["◉", "▰", "▤", "◈", "◒"][index % 5]}
+                    <article
+                      key={product.id}
+                      className="overflow-hidden rounded-[15px] border border-[#e6e8df] bg-white transition duration-200 hover:-translate-y-0.5 hover:shadow-[0_8px_24px_rgba(38,59,41,0.06)]"
+                    >
+                      <div
+                        className={`relative grid min-h-[110px] place-items-center sm:min-h-[145px] ${art.background} ${art.foreground}`}
+                      >
+                        <span className="text-5xl font-normal leading-none sm:text-[63px]">
+                          {art.symbol}
                         </span>
 
-                        <span className="product-number">
+                        <span className="absolute right-3 bottom-3 text-[9px] font-extrabold tracking-[1.4px] opacity-80">
                           ITEM {String(index + 1).padStart(2, "0")}
                         </span>
                       </div>
 
-                      <div className="product-details">
-                        <h3>{product.name}</h3>
+                      <div className="p-3 sm:p-4">
+                        <h3 className="text-[13px] font-bold sm:text-[15px]">
+                          {product.name}
+                        </h3>
 
-                        <p className="stock-label">
+                        <p className="my-2 mb-4 text-xs text-[#737b74]">
                           {product.availableUnits > 0
                             ? `${product.availableUnits} available`
                             : "Out of stock"}
                         </p>
 
-                        <div className="product-buy-row">
-                          <strong className="product-price">
+                        <div className="flex flex-col items-start justify-between gap-3 min-[400px]:flex-row min-[400px]:items-center">
+                          <strong className="text-sm tracking-tight sm:text-base">
                             {formatPrice(product.price)}
                           </strong>
 
                           {quantity === 0 ? (
                             <button
-                              className="add-button"
                               disabled={product.availableUnits === 0}
                               onClick={() => changeQuantity(product, 1)}
+                              className="rounded-[9px] border border-[#cad9ce] bg-[#f4f8f3] px-3 py-2 text-xs font-bold text-[#235b43] transition-colors hover:bg-[#e5efe6] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#235b43] disabled:cursor-not-allowed disabled:opacity-45"
                             >
                               + Add
                             </button>
                           ) : (
-                            <div className="quantity-control">
+                            <div className="flex items-center gap-3 rounded-[9px] border border-[#e6e8df] p-1">
                               <button
                                 aria-label={`Remove one ${product.name}`}
                                 onClick={() => changeQuantity(product, -1)}
+                                className="grid size-[27px] place-items-center rounded-md bg-[#eef3ed] text-lg text-[#235b43] hover:bg-[#dfe9dd]"
                               >
                                 −
                               </button>
 
-                              <span>{quantity}</span>
+                              <span className="min-w-3 text-center text-[13px] font-bold">
+                                {quantity}
+                              </span>
 
                               <button
                                 aria-label={`Add one ${product.name}`}
                                 disabled={quantity >= product.availableUnits}
                                 onClick={() => changeQuantity(product, 1)}
+                                className="grid size-[27px] place-items-center rounded-md bg-[#eef3ed] text-lg text-[#235b43] hover:bg-[#dfe9dd] disabled:cursor-not-allowed disabled:opacity-45"
                               >
                                 +
                               </button>
@@ -515,50 +549,65 @@ export default function Home() {
             )}
           </section>
 
-          <aside className="cart-panel">
-            <div className="cart-title-row">
-              <h2>Your basket</h2>
+          {/* Basket */}
+          <aside className="row-start-1 rounded-2xl border border-[#e6e8df] bg-white p-5 sm:p-[23px] lg:sticky lg:top-5 lg:row-auto">
+            <div className="flex items-center justify-between border-b border-[#e6e8df] pb-5">
+              <h2 className="text-[21px] font-bold tracking-tight">
+                Your basket
+              </h2>
 
-              <span className="cart-count">
-                {cartItems.reduce((sum, item) => sum + item.quantity, 0)}
+              <span className="grid size-[27px] place-items-center rounded-full bg-[#eaf1e9] text-xs font-extrabold text-[#235b43]">
+                {cartCount}
               </span>
             </div>
 
             {cartItems.length === 0 ? (
-              <div className="cart-empty">
-                <span>＋</span>
-                <p>Your basket is waiting.</p>
-                <small>Add something from the store to get started.</small>
+              <div className="flex min-h-[170px] flex-col items-center justify-center text-center">
+                <span className="grid size-[37px] place-items-center rounded-full bg-[#f0f3ed] text-2xl text-[#235b43]">
+                  +
+                </span>
+                <p className="mt-3 mb-1 text-[13px] font-bold">
+                  Your basket is waiting.
+                </p>
+                <p className="text-[10px] leading-4 text-[#737b74]">
+                  Add something from the store to get started.
+                </p>
               </div>
             ) : (
-              <div className="cart-lines">
+              <div className="py-2">
                 {cartItems.map((item) => (
-                  <div className="cart-line" key={item.id}>
-                    <div>
+                  <div
+                    key={item.id}
+                    className="flex items-start justify-between gap-3 py-3 text-xs"
+                  >
+                    <div className="grid gap-1.5">
                       <strong>{item.name}</strong>
-
-                      <small>
+                      <span className="text-[#737b74]">
                         {item.quantity} × {formatPrice(item.price)}
-                      </small>
+                      </span>
                     </div>
 
-                    <strong>{formatPrice(item.price * item.quantity)}</strong>
+                    <strong className="shrink-0">
+                      {formatPrice(item.price * item.quantity)}
+                    </strong>
                   </div>
                 ))}
               </div>
             )}
 
-            <div className="cart-total">
+            <div className="flex items-center justify-between border-t border-[#e6e8df] py-4 text-[13px]">
               <span>Subtotal</span>
-              <strong>{formatPrice(total)}</strong>
+              <strong className="text-xl tracking-tight">
+                {formatPrice(total)}
+              </strong>
             </div>
 
-            <p className="cart-note">
+            <p className="mb-4 text-[11px] leading-5 text-[#737b74]">
               Stock is reserved for 2 minutes after your order is placed.
             </p>
 
             <button
-              className="primary-button full-button"
+              className="min-h-[47px] w-full rounded-[10px] bg-[#235b43] px-4 py-3 text-[13px] font-bold text-white transition-colors hover:bg-[#194631] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#235b43] disabled:cursor-not-allowed disabled:opacity-45"
               disabled={cartItems.length === 0 || placingOrder || loading}
               onClick={() => void placeOrder()}
             >
@@ -566,14 +615,15 @@ export default function Home() {
               {!placingOrder && cartItems.length > 0 ? " →" : ""}
             </button>
 
-            <p className="secure-note">
+            <p className="mt-3 text-center text-[10px] leading-4 text-[#737b74]">
               Prices shown in INR · Payment status verified by server
             </p>
           </aside>
         </div>
       )}
 
-      <footer className="footer">
+      {/* Footer */}
+      <footer className="flex flex-col gap-2 border-t border-[#e6e8df] py-6 text-[11px] text-[#737b74] sm:flex-row sm:items-center sm:justify-between sm:gap-4">
         <span>Pickup Counter</span>
         <span>Simple shopping, ready for collection.</span>
       </footer>

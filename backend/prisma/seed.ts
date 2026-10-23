@@ -1,4 +1,4 @@
-import "dotenv/config";
+import 'dotenv/config';
 import { PrismaClient } from '../src/generated/prisma/client';
 import { PrismaPg } from '@prisma/adapter-pg';
 
@@ -20,10 +20,7 @@ async function main() {
   for (const product of products) {
     await prisma.product.upsert({
       where: { name: product.name },
-      update: {
-        price: product.price,
-        stock: product.stock,
-      },
+      update: {},
       create: product,
     });
   }
