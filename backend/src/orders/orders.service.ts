@@ -192,4 +192,53 @@ export class OrdersService {
       include: { items: true },
     });
   }
+
+  async claimPickup(orderId: string) {
+    return this.prisma.$transaction(async (tx) => {
+      const order = await tx.order.findUnique({
+        where: { id: orderId },
+        include: { items: true },
+      });
+
+      if (!order) {
+        throw new NotFoundException('Order not found');
+      }
+
+      if (order.status !== 'PAID' || order.claimedAt !== null) {
+        throw new ConflictException('Order is not eligible for pickup');
+      }
+
+      // Atomically claim the order. Only one concurrent request can win.
+      const claim = await tx.order.updateMany({
+        where: {
+          id: orderId,
+          status: 'PAID',
+          claimedAt: null,
+        },
+        data: {
+          claimedAt: new Date(),
+          status: 'PICKED_UP',
+        },
+      });
+
+      if (claim.count !== 1) {
+        throw new ConflictException('Order has already been claimed');
+      }
+
+      for (const item of order.items) {
+        await tx.product.update({
+          where: { id: item.productId },
+          data: {
+            stock: { decrement: item.quantity },
+          },
+        });
+      }
+
+      return {
+        orderId: order.id,
+        status: 'PICKED_UP',
+        message: 'Pickup claimed successfully',
+      };
+    });
+  }
 }

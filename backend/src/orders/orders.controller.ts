@@ -1,4 +1,12 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  Post,
+} from '@nestjs/common';
 import { OrdersService } from './orders.service';
 import { CreateOrderDto } from './dto/create-order.dto';
 
@@ -42,5 +50,10 @@ export class OrdersController {
       ),
       items: order.items,
     };
+  }
+
+  @Post(':id/pickup-claim')
+  async claimPickup(@Param('id') id: string) {
+    return this.ordersService.claimPickup(id);
   }
 }
