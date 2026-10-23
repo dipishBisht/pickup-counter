@@ -13,17 +13,13 @@ docker compose up --build
 - API: http://localhost:8080
 - The backend container applies the schema (`prisma db push`) and seeds 5 products on start.
 
-Default webhook secret is `dev-webhook-secret` (override with `PAYMENT_WEBHOOK_SECRET`).
-
 ## Try the flow
 
 1. Open http://localhost:3000, add items, **Place order** (copy the order reference).
-2. Simulate the payment provider (signed with the shared secret):
+2. Simulate the payment :
    ```bash
-   cd backend && cp .env.example .env && npm install
-   npm run send-webhook -- <orderId>                       # correct amount -> PAID
-   npm run send-webhook -- <orderId> 1                     # wrong amount  -> NEEDS_REVIEW
-   npm run send-webhook -- <orderId> 2000 evt_fixed        # re-run with same eventId -> duplicate, no-op
+   cd backend && cp .env.example .env
+   npx tsx -r dotenv/config scripts/simulate-payment.ts <reference-id>
    ```
 3. Locker claim: `curl -X POST http://localhost:8080/orders/<orderId>/pickup-claim` (201 once, then 409).
 
