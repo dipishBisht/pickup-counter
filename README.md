@@ -68,6 +68,7 @@ For local development, create `backend/.env` using the example file if one is pr
 
 ```bash
 cd backend
+npm i
 cp .env.example .env
 ```
 
