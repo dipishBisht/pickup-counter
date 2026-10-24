@@ -1,6 +1,5 @@
-
 node_modules
 dist
-coverage
 .env
-.git
+.env.*
+!.env.example

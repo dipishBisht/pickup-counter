@@ -1,83 +1,280 @@
 # Pickup Counter
 
-Self-service snack counter: pick items, hold stock for 120 s, pay by (simulated) UPI webhook, collect from a locker.
-NestJS + Prisma + PostgreSQL backend, Next.js customer screen. TypeScript throughout. Money is always integer paise.
+A self-service snack counter application where customers select products, reserve stock for 120 seconds, pay through a simulated payment webhook, and collect their order through a pickup claim.
 
-## Run everything (one command)
+## Tech Stack
+
+- **Frontend:** Next.js, React, TypeScript
+- **Backend:** NestJS, TypeScript
+- **Database:** PostgreSQL
+- **ORM:** Prisma
+- **Testing:** Jest, ts-jest, real PostgreSQL database
+- **Payment simulation:** HMAC-SHA256 signed webhook
+
+All monetary values are stored and processed as integer paise to avoid floating-point rounding errors.
+
+## Features
+
+- Product catalog with prices and available inventory
+- Atomic stock reservations when customers place orders
+- 120-second reservation expiry
+- Automatic availability calculation that excludes expired reservations
+- Payment webhook signature verification
+- Idempotent payment event processing
+- Order review for payment amount mismatches and late payments
+- Concurrent-safe pickup claims
+- Stock deduction only after a successful pickup claim
+- Customer interface with a cart, order status, and countdown
+- Automated end-to-end tests using PostgreSQL
+
+## Requirements
+
+Install the following before running the project:
+
+- Docker
+- Docker Compose
+- Node.js and npm, if running scripts or tests outside Docker
+
+## Run the Application
+
+From the project root, run:
 
 ```bash
 docker compose up --build
 ```
 
-- Customer screen: http://localhost:3000
-- API: http://localhost:8080
-- The backend container applies the schema (`prisma db push`) and seeds 5 products on start.
+The application should be available at:
 
-## Try the flow
+- **Customer interface:** http://localhost:3000
+- **Backend API:** http://localhost:8080
 
-1. Open http://localhost:3000, add items, **Place order** (copy the order reference).
-2. Simulate the payment :
-   ```bash
-   cd backend && cp .env.example .env
-   npx tsx -r dotenv/config scripts/simulate-payment.ts <reference-id>
-   ```
-3. Locker claim: `curl -X POST http://localhost:8080/orders/<orderId>/pickup-claim` (201 once, then 409).
+Docker Compose starts PostgreSQL, the backend, and the frontend.
 
-## Run the tests
+The backend applies database migrations and seeds the product catalog during startup.
 
-Tests use a **real PostgreSQL** database (never mocks).
+To stop the application, press `Ctrl+C`. If you started it in detached mode, use:
 
 ```bash
-docker compose up -d db        # Postgres on localhost:5432
+docker compose down
+```
+
+The PostgreSQL data is stored in a Docker volume and is retained when containers are stopped.
+
+## Environment Configuration
+
+The backend uses environment variables for the database connection, webhook secret, frontend origin, and server port.
+
+For local development, create `backend/.env` using the example file if one is provided:
+
+```bash
 cd backend
 cp .env.example .env
+```
+
+If `backend/.env` already exists, edit it rather than overwriting it.
+
+Example local development configuration:
+
+```dotenv
+DATABASE_URL="postgresql://pickup_user:local_dev_password@localhost:5432/pickup_counter?schema=public"
+TEST_DATABASE_URL="postgresql://pickup_user:local_dev_password@localhost:5432/pickup_test"
+PAYMENT_WEBHOOK_SECRET="local-webhook-secret-change-me"
+FRONTEND_ORIGIN="http://localhost:3000"
+PORT="8080"
+```
+
+These values must match the local PostgreSQL and Docker Compose configuration.
+
+**Important:** These are development credentials only. Do not use them in production or commit real secrets to version control.
+
+The test setup uses `TEST_DATABASE_URL` to keep automated tests separate from the development database.
+
+## Try the Customer Flow
+
+1. Start the application with `docker compose up --build`.
+2. Open http://localhost:3000.
+3. Browse the products and add items to the cart.
+4. Place an order.
+5. Copy the order ID shown by the application.
+6. Simulate payment using the backend payment script.
+7. Confirm that the order status updates.
+8. Claim the order for pickup.
+
+## Simulate a Payment
+
+The repository includes a payment simulation script that sends a signed webhook to the backend.
+
+From the `backend` directory, configure the environment and run:
+
+```bash
+npx tsx -r dotenv/config scripts/simulate-payment.ts <order-id>
+```
+
+Replace `<order-id>` with the order ID returned when placing the order.
+
+The simulator and backend must use the same `PAYMENT_WEBHOOK_SECRET`.
+
+The webhook must contain the event ID, order ID, payment amount in the field required by the API contract, and the captured status. Its signature is calculated using HMAC-SHA256 over the exact raw request body.
+
+## Claim an Order for Pickup
+
+After an order has been paid, send a pickup claim request:
+
+```bash
+curl -i -X POST "http://localhost:8080/orders/<order-id>/pickup-claim"
+```
+
+Replace `<order-id>` with the actual order ID.
+
+A successful claim returns HTTP `201`. A repeated or invalid claim returns HTTP `409`.
+
+The pickup operation is atomic: stock is deducted only once when the order transitions successfully to the picked-up state.
+
+## API Overview
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| `GET` | `/products` | Retrieve products and currently available units |
+| `POST` | `/orders` | Create an order and reserve inventory |
+| `GET` | `/orders/:id` | Retrieve order status and expiry information |
+| `POST` | `/payments/webhook` | Receive and validate payment events |
+| `POST` | `/orders/:id/pickup-claim` | Claim a paid order for pickup |
+
+### Create an Order
+
+Example request:
+
+```json
+{
+  "items": [
+    {
+      "productId": "PRODUCT_ID",
+      "quantity": 2
+    }
+  ]
+}
+```
+
+The API returns the order ID, total amount, status, expiry information, and the server-calculated `expiresInSeconds` value.
+
+The `idempotencyKey` field may also be provided if supported by the current API implementation.
+
+Orders that cannot be fulfilled because of insufficient inventory should fail with HTTP `409`. The failed request must not leave a partial stock reservation.
+
+### Payment Webhook
+
+The payment endpoint accepts captured payment events signed with the configured webhook secret.
+
+The `X-Signature` header contains the hexadecimal HMAC-SHA256 signature of the exact raw request body.
+
+Repeated event IDs must not process the same payment more than once. Payment amount mismatches require review rather than being marked paid.
+
+Use the exact field names implemented in the API contract when sending payment events.
+
+## Inventory and Reservation Design
+
+### Available Inventory
+
+Available units are calculated from physical stock minus inventory reserved by active orders.
+
+Pending orders count as reservations only while their hold has not expired. Paid but unclaimed orders continue to reserve inventory.
+
+This allows expired holds to stop affecting availability without relying on a separate background expiry job.
+
+The API also updates expired pending orders when relevant order or product endpoints are accessed.
+
+### Atomic Order Creation
+
+Order creation uses a database transaction to prevent overselling.
+
+Product rows are locked in a consistent order before availability is checked and the order is created. If any requested quantity cannot be fulfilled, the transaction fails without leaving partial reservations.
+
+### Payment Idempotency
+
+Webhook event IDs are unique. Duplicate events are acknowledged without applying the payment transition a second time.
+
+The payment amount is validated before an order is marked paid. Amount mismatches are flagged for review.
+
+### Late Payments
+
+A payment captured after a reservation expires must not cause inventory to be oversold.
+
+The application must follow its implemented late-payment policy. If the order can still be fulfilled safely, it may be accepted; otherwise, it should be flagged for manual review and possible refund.
+
+No automatic refund is performed by the simulated payment integration.
+
+### Pickup Claims
+
+Pickup claims are handled using a database-guarded state transition. Concurrent requests cannot successfully claim the same order twice.
+
+The stock deduction and order state change occur in the same transaction.
+
+## Automated Tests
+
+The end-to-end tests use a real PostgreSQL database rather than mocked database calls.
+
+### Configure the Test Database
+
+Start PostgreSQL from the project root:
+
+```bash
+docker compose up -d db
+```
+
+In `backend/.env`, configure `TEST_DATABASE_URL` to point to the dedicated test database:
+
+```dotenv
+TEST_DATABASE_URL="postgresql://pickup_user:local_dev_password@localhost:5432/pickup_test"
+```
+
+The test setup checks that the database name ends in `_test` before performing a destructive schema reset.
+
+**Warning:** Test setup may reset the configured test database. Never point `TEST_DATABASE_URL` at your development or production database.
+
+### Run the Tests
+
+From the `backend` directory:
+
+```bash
 npm install
 npm run test:e2e
 ```
 
-The run creates `pickup_counter_test` automatically (or set `TEST_DATABASE_URL`), pushes the schema, and truncates tables between tests, so your dev data is untouched. Tests run in band (one worker) because they share one database.
+The end-to-end test configuration runs the suite with a single worker because tests share a database.
 
-What they prove:
+### Verified Test Scenarios
 
-| Requirement | Test |
+The following four tests have been run successfully:
+
+| Scenario | Expected result |
 |---|---|
-| 10 customers, last 2 units | exactly 2 orders created/held, 8 get 409, DB holds sum to 2 |
-| Multi-item order, one line short | 409 and nothing held (atomic) |
-| Same webhook twice / concurrently | 4 deliveries -> 1 processed, 1 `WebhookEvent` row, order PAID |
-| Bad / missing signature | 401, order untouched |
-| Wrong amount | `NEEDS_REVIEW` |
-| Two simultaneous pickup claims | statuses `[201, 409]`, stock reduced exactly once |
-| Unpaid / expired / needs_review claim | 409, stock unchanged |
-| Late payment (both branches) | see below |
+| Ten customers compete for the last two units | Exactly two orders succeed; the other eight fail with HTTP `409` |
+| Two simultaneous deliveries of the same payment event | One event is processed and the other is treated as a duplicate |
+| A previously processed payment event is replayed | The replay is ignored and the order remains paid |
+| Two simultaneous pickup claims | Exactly one claim succeeds; the other returns HTTP `409`; stock is deducted once |
 
-## Design decisions
-
-**Money.** Integer paise in the DB and all arithmetic. The UI divides by 100 only for display.
-
-**Holds without a reaper job.** Availability is *computed*: `stock − units in (PENDING and not yet expired) orders − units in PAID-but-unclaimed orders`. An expired hold therefore stops counting the instant its time passes, with no background job to lag or fail. `GET /products` and `GET /orders/:id` also persist the `PENDING → EXPIRED` status lazily.
-
-**No overselling.** `POST /orders` runs in one transaction that takes `SELECT … FOR UPDATE` on each requested product row (in sorted id order, so no deadlocks), then re-counts holds and creates the order. Concurrent orders for the same product queue on that lock, so each sees the previous one's hold. Any shortfall throws and rolls back the whole transaction (409, nothing held). An optional `idempotencyKey` makes client retries safe.
-
-**Webhook.** HMAC-SHA256 is checked over the exact raw bytes (`rawBody`) with a timing-safe compare. Idempotency is a unique `eventId` row inserted in the same transaction as the state change; the order row is locked first so racing deliveries serialize, and a unique-violation race resolves to "duplicate". Wrong amount → `NEEDS_REVIEW`. Non-`captured` statuses are acknowledged and ignored.
-
-**Late payment (the open question).** A valid, correct-amount capture arriving after the hold expired is **honoured if the units are still free, otherwise sent to `NEEDS_REVIEW`**. After locking the product rows, we re-check availability against everyone else's holds: if it fits, the order becomes `PAID` and the units are held for pickup again; if someone has bought them, the order becomes `NEEDS_REVIEW` for a manual refund. *Why:* the customer really paid, so rejecting a payment we could fulfil is needlessly hostile; but we must never oversell, so when stock is gone a human decides (refund vs. substitute). Auto-refunding is out of scope with no payment provider. Both branches are tested.
-
-**Pickup.** One conditional `UPDATE … WHERE status='PAID' AND claimedAt IS NULL`. Postgres row locking lets exactly one concurrent claimer match; the other sees 0 rows and gets 409. Stock is decremented in the same transaction, so a claim can't half-apply.
-
-**Countdown.** The server returns `expiresInSeconds` measured at send time. The browser anchors that to its own monotonic `performance.now()` and counts down from there, so a customer-screen clock that is minutes wrong has no effect. It re-anchors on every poll (every 3 s). Error is limited to network latency (typically well under a second).
+These tests verify important concurrency and idempotency properties against PostgreSQL.
 
 ## Assumptions
 
-- Payment amounts are whole paise; `status: "captured"` is the only payment-success status.
-- Paid-but-unclaimed orders keep their units reserved; "stock" is physical units, decremented permanently on pickup.
-- Orders are single-use; there is no auth (locker and counter are trusted clients).
-- `idempotencyKey` is optional; the spec's plain `{items}` body works.
-- Re-seeding refreshes prices only, never stock.
+- All monetary amounts are integer paise.
+- Captured payment events represent successful payment attempts.
+- Product stock represents physical inventory.
+- Active unpaid orders reserve inventory for 120 seconds.
+- Paid but unclaimed orders continue to reserve inventory.
+- Physical stock is permanently decremented when pickup succeeds.
+- A payment amount mismatch requires review.
+- Late payments must not cause inventory to be oversold.
+- The payment integration is simulated; no real payment provider or automated refund system is connected.
+- Authentication and locker-specific authorization are outside the current scope.
 
-## What I'd do next
+## Potential Improvements
 
-- Add a DB `CHECK (stock >= 0)` and real Prisma migrations instead of `db push`.
-- Auto-refund/notify flow for `NEEDS_REVIEW`; admin screen for those orders.
-- Locker authentication (API key per locker) and rate limiting.
-- Component tests for the cart/countdown (fake timers + skewed `Date`) and a Playwright smoke test.
-- Structured logging and metrics for webhook outcomes.
+- Add database constraints to prevent negative stock.
+- Use versioned Prisma migrations for all deployment environments.
+- Add automated tests for invalid signatures, amount mismatches, expired orders, and late-payment branches.
+- Add an administrative workflow for orders requiring review.
+- Integrate a real payment provider and refund workflow.
+- Add authentication, authorization, and rate limiting.
+- Add frontend component tests and browser-level smoke tests.
+- Add structured logging and monitoring for order and payment events.

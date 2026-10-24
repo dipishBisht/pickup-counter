@@ -1,18 +1,74 @@
-# AI notes
+# AI Usage Notes
 
-> Draft — edit this so it reflects what you actually did. Delete anything untrue.
+## Tools Used
 
-**Tools used:** Claude (chat) for scaffolding the NestJS/Prisma code, the concurrency design, the test suite and the docs; I reviewed, ran and adjusted everything.
+I used AI assistance during development to help plan and implement parts of the Pickup Counter application. I reviewed the generated suggestions, integrated relevant changes, and ran the application and automated tests to verify behavior.
 
-**What I used it for:** drafting services and controllers, the locking strategy for stock holds, the Jest + real-Postgres test setup, Docker files, and README/AI notes.
+**AI tools used:** Update this section to name the tools you actually used, such as ChatGPT or Claude.
 
-**A prompt that worked well:**
-> "Two lockers can POST /orders/:id/pickup-claim for the same order at the same instant. Exactly one must succeed and the other must get 409. Design it with PostgreSQL and Prisma, no in-memory locks, and write a test that fires both requests concurrently against a real database."
+## How AI Assisted
 
-It produced a conditional `updateMany` (`WHERE status='PAID' AND claimedAt IS NULL`) and a `Promise.all` test, which I then ran.
+AI assistance was used for parts of the following development tasks:
 
-**Something the AI got wrong (and how I noticed):**
-1. *Contract mismatch.* The generated webhook controller and simulator used `amount`, but the brief specifies `amountPaise`. They worked with each other, so my own manual test passed. I only caught it when re-reading the brief against the code in an audit. Fixed in the controller, service, script and tests.
-2. *Late payments silently ignored.* The first version only handled `PENDING` orders, so a valid payment for an already-`EXPIRED` order was recorded and then did nothing. A test for the late-payment case exposed it; the service now re-checks stock and either pays or flags for review.
-3. *Jest wouldn't start.* The Prisma client generated as ESM and crashed Jest before any test ran. Setting `moduleFormat = "cjs"` in the generator fixed it.
-4. *Countdown trusted the browser clock.* It compared the server's absolute `expiresAt` with `Date.now()`, which breaks on a skewed clock. Replaced with server-measured `expiresInSeconds` anchored to `performance.now()`.
+- Planning the NestJS backend structure and API endpoints.
+- Exploring PostgreSQL concurrency strategies for stock reservations.
+- Implementing payment webhook validation and idempotency.
+- Designing pickup claims that are safe under concurrent requests.
+- Setting up end-to-end tests against a real PostgreSQL database.
+- Preparing Docker configuration and project documentation.
+- Reviewing implementation decisions and identifying potential edge cases.
+
+The final implementation was tested against the local environment. AI-generated suggestions were not treated as correct without review or verification.
+
+## Example Prompt
+
+One useful prompt was:
+
+> Two clients may send a pickup claim for the same order at the same time. Exactly one request must succeed, and the other must return HTTP 409. Design a solution using PostgreSQL transactions and conditional database updates, without in-memory locks. Include an end-to-end test that sends both requests concurrently against a real PostgreSQL database.
+
+This prompt focused on a specific concurrency requirement and asked for a database-backed solution rather than a process-local lock.
+
+## An AI Mistake I Identified
+
+**Important:** The example below should reflect a mistake that actually occurred during development. Keep it only if it accurately describes your experience.
+
+An issue identified during review was a possible mismatch between the payment webhook's amount field and the assignment's required API contract.
+
+The backend, simulator, and tests can agree with one another while still disagreeing with the external specification. A successful local test therefore does not automatically prove contract compliance.
+
+I learned to compare request fields against the assignment requirements, not just verify that the frontend, backend, and test script work together.
+
+Before submission, the webhook controller, validation DTO, service, simulator, and tests should all be checked for consistent use of the required amount field.
+
+## Verification
+
+I ran the end-to-end test suite against a dedicated PostgreSQL test database.
+
+The four verified tests covered:
+
+1. Ten concurrent customers competing for two available units.
+2. Concurrent deliveries of the same payment webhook event.
+3. Replaying a previously processed payment event.
+4. Concurrent pickup claims for the same paid order.
+
+All four tests passed in the observed run.
+
+The test setup used `pickup_test` rather than the development database. This matters because the test setup resets its configured database before executing the suite.
+
+## Development Decisions
+
+Several important decisions were made during development:
+
+- **Integer money representation:** Prices and totals are stored in paise to avoid floating-point arithmetic errors.
+- **Database-backed concurrency:** Stock reservations and pickup claims rely on PostgreSQL transactions and conditional state changes rather than in-memory locks.
+- **Idempotent payment processing:** Webhook event IDs are used to prevent duplicate payment processing.
+- **Server-authoritative expiry:** The backend provides reservation expiry information; the browser countdown is for display and does not determine whether a payment or pickup is valid.
+- **Explicit test isolation:** Automated tests use a separate database whose name ends in `_test`.
+
+## Limitations
+
+The payment provider is simulated, so the application does not perform real payment collection or automatic refunds.
+
+Orders that require payment review need an operational workflow before this system could be used in production.
+
+The project is a take-home assignment implementation, not a production-hardened payment or inventory platform.
